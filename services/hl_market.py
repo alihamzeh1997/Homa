@@ -13,10 +13,11 @@ from schema import (
 )
 
 
-VALID_INTERVALS = {"1m", "5m", "15m", "1h", "4h", "1d"}
+VALID_INTERVALS = {"1m", "3m", "5m", "15m", "1h", "4h", "1d"}
 
 INTERVAL_MINUTES = {
     "1m": 1,
+    "3m": 3,
     "5m": 5,
     "15m": 15,
     "1h": 60,
