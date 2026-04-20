@@ -24,6 +24,9 @@ ANALYST_MODELS = {
     "GPT": "openai/gpt-5.4-mini"
 }
 
+# Node names are the lowercase analyst keys — used by graph.py for wiring
+ANALYST_NODES = [name.lower() for name in ANALYST_MODELS]
+
 # ---------------------------------------------------------
 # 2. SHARED PROMPT TEMPLATE
 # ---------------------------------------------------------
