@@ -35,3 +35,12 @@ class MarketContext(BaseModel):
     
     intraday_series: List[IntradayIndicator]
     htf_series: List[HTFIndicator]
+
+# ----------Sentinel Output Schema (Router Contract)----------
+class SentinelDecision(BaseModel):
+    decision: Literal["SKIP", "EMERGENCY", "NORMAL"] = Field(
+        description="Must be exactly one of: 'SKIP', 'EMERGENCY', or 'NORMAL'"
+    )
+    reasoning: str = Field(
+        description="A brief 1-2 sentence explanation of why this decision was made based on the data."
+    )
