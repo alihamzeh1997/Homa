@@ -1,0 +1,18 @@
+[project]
+name = "homa-ali"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12,<3.14"
+dependencies = [
+    "eventregistry>=9.1",
+    "hyperliquid-python-sdk>=0.23.0",
+    "langchain>=1.2.15",
+    "langchain-community>=0.4.1",
+    "langchain-openai>=1.1.14",
+    "langgraph>=1.1.8",
+    "loguru>=0.7.3",
+    "pandas-ta>=0.4.71b0",
+    "pydantic>=2.13.2",
+    "streamlit>=1.56.0",
+]
