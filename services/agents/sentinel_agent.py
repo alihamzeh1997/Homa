@@ -8,21 +8,25 @@ from services.agents.agents_schema import GraphState, SentinelDecision
 
 load_dotenv()
 
+# Model names for the Sentinel with fallback routing
+_SentinelModel = "deepseek/deepseek-v3.2"
+_SentinelModelFallback = "openai/gpt-5.4-nano"
+
 # ---------------------------------------------------------
 # 1. INITIALIZE LLMS WITH FALLBACK ROUTING
 # ---------------------------------------------------------
 # Primary: DeepSeek via OpenRouter
 primary_llm = ChatOpenAI(
-    model="deepseek/deepseek-v3.2",
+    model=_SentinelModel,
     api_key=os.getenv("OPENROUTER_API_KEY"),
     base_url="https://openrouter.ai/api/v1",
     temperature=0.1 
 )
 primary_structured = primary_llm.with_structured_output(SentinelDecision)
 
-# Fallback: GPT via OpenAI
+# Fallback: GPT 5.4 nano via OpenRouter
 fallback_llm = ChatOpenAI(
-    model="openai/gpt-5.4-nano",
+    model=_SentinelModelFallback,
     api_key=os.getenv("OPENROUTER_API_KEY"),
     base_url="https://openrouter.ai/api/v1",
     temperature=0.1
