@@ -1,10 +1,12 @@
 import os
 from typing import Dict, Any
+from datetime import datetime, timezone
 from dotenv import load_dotenv
-from loguru import logger  # Added loguru
+from loguru import logger
 
 from langchain_openai import ChatOpenAI
-from services.agents.agents_schema import GraphState, SentinelDecision
+from services.agents.state_schema import GraphState
+from services.agents.agents_schema import SentinelDecision
 
 load_dotenv()
 
@@ -15,7 +17,6 @@ _SentinelModelFallback = "openai/gpt-5.4-nano"
 # ---------------------------------------------------------
 # 1. INITIALIZE LLMS WITH FALLBACK ROUTING
 # ---------------------------------------------------------
-# Primary: DeepSeek via OpenRouter
 primary_llm = ChatOpenAI(
     model=_SentinelModel,
     api_key=os.getenv("OPENROUTER_API_KEY"),
@@ -24,7 +25,6 @@ primary_llm = ChatOpenAI(
 )
 primary_structured = primary_llm.with_structured_output(SentinelDecision)
 
-# Fallback: GPT 5.4 nano via OpenRouter
 fallback_llm = ChatOpenAI(
     model=_SentinelModelFallback,
     api_key=os.getenv("OPENROUTER_API_KEY"),
@@ -33,27 +33,30 @@ fallback_llm = ChatOpenAI(
 )
 fallback_structured = fallback_llm.with_structured_output(SentinelDecision)
 
-# Combine them
 robust_llm = primary_structured.with_fallbacks([fallback_structured])
 
 # ---------------------------------------------------------
-# 2. THE SENTINEL NODE LOGIC
+# 2. THE ASYNC SENTINEL NODE LOGIC
 # ---------------------------------------------------------
-def sentinel_node(state: GraphState) -> Dict[str, Any]:
+async def sentinel_node(state: GraphState) -> Dict[str, Any]:
     """
     LangGraph Node: The gatekeeper. Evaluates market context to determine
     if the workflow should proceed, skip, or trigger an emergency bypass.
+    Executes asynchronously to unblock the main event loop.
     """
     symbol = state.get("symbol", "BTC")
     market = state.get("market_data")
     news = state.get("news")
     portfolio = state.get("portfolio")
 
-    logger.debug(f"Evaluating Sentinel constraints for {symbol}...")
+    # Capture the exact current time in UTC
+    current_time_utc = datetime.now(timezone.utc).strftime("%A, %Y-%m-%d %H:%M:%S UTC")
+
+    logger.debug(f"🛡️ Evaluating Sentinel constraints for {symbol} at {current_time_utc}...")
 
     # Safely extract HTF data
     if market and market.htf_series:
-        htf_data_str = str([h.model_dump() for h in market.htf_series[-3:]])
+        htf_data_str = str([h.model_dump() for h in market.htf_series])
     else:
         htf_data_str = "N/A"
 
@@ -61,11 +64,13 @@ def sentinel_node(state: GraphState) -> Dict[str, Any]:
     You are the Sentinel Risk Manager for an automated {symbol} trading desk.
     Your job is to classify the current market regime and decide if the trading desk should operate.
     
+    CURRENT TIME: {current_time_utc}
+    
     CURRENT MARKET DATA:
     - Price: {market.current_price if market else 'N/A'}
     - Funding Rate: {market.funding_rate if market else 'N/A'}
     - Open Interest: {market.open_interest if market else 'N/A'}
-    - HTF Trend (Last 3 periods): {htf_data_str}
+    - HTF Trend (Full History): {htf_data_str}
     
     LATEST NEWS SUMMARY:
     - Articles Count: {news.article_count if news else 0}
@@ -79,13 +84,13 @@ def sentinel_node(state: GraphState) -> Dict[str, Any]:
     1. Output 'SKIP' if the market is choppy, volatility is dead, and news is irrelevant. (Goal: Save API costs).
     2. Output 'EMERGENCY' if there is extreme breaking news, a flash crash/pump, or extreme funding rate anomalies. (Goal: Protect capital).
     3. Output 'NORMAL' if there is healthy volatility and a clear trend/pullback structure. (Goal: Trade).
+    
+    Take the current time and day of the week into account when assessing volatility expectations.
     """
 
     try:
-        # Invoke the robust LLM
-        result: SentinelDecision = robust_llm.invoke(prompt_text)
+        result: SentinelDecision = await robust_llm.ainvoke(prompt_text)
         
-        # Log the successful decision
         if result.decision == "EMERGENCY":
             logger.warning(f"🚨 SENTINEL TRIGGERED EMERGENCY | Reason: {result.reasoning}")
             return {"skip_workflow": False, "is_emergency": True}
