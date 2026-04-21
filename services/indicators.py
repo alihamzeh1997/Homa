@@ -1,7 +1,7 @@
 import pandas as pd
 import pandas_ta as ta
 
-from schema import IntradayIndicator, HTFIndicator
+from services.schema import IntradayIndicator, HTFIndicator
 
 
 # ---------- HELPER ----------

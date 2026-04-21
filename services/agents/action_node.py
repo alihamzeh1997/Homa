@@ -1,10 +1,9 @@
 import os
-import time
-from typing import Dict, Any
+from typing import Dict, Any, List
 from dotenv import load_dotenv
 from loguru import logger
-from eth_account.signers.local import LocalAccount
 import eth_account
+from eth_account.signers.local import LocalAccount
 
 from hyperliquid.exchange import Exchange
 from hyperliquid.info import Info
@@ -14,145 +13,212 @@ from services.agents.state_schema import GraphState
 
 load_dotenv()
 
-# ---------------------------------------------------------
-# 1. INITIALIZE HYPERLIQUID CLIENTS
-# ---------------------------------------------------------
-# Hyperliquid requires a private key to sign transactions directly on their L1.
 PRIVATE_KEY = os.getenv("HYPERLIQUID_PRIVATE_KEY")
-if not PRIVATE_KEY:
-    logger.warning("No HYPERLIQUID_PRIVATE_KEY found. Action node will run in Dry-Run/Simulation mode.")
 
+
+# ---------------------------------------------------------
+# CLIENT HELPERS
+# ---------------------------------------------------------
 def _get_exchange() -> Exchange:
-    """Helper to initialize the Hyperliquid Exchange client."""
     account: LocalAccount = eth_account.Account.from_key(PRIVATE_KEY)
-    # Use constants.TESTNET_API_URL if you are testing!
     return Exchange(account, constants.TESTNET_API_URL)
+
 
 def _get_info() -> Info:
     return Info(constants.TESTNET_API_URL, skip_ws=True)
 
+
 # ---------------------------------------------------------
-# 2. ASYNC ACTION (EXECUTION) NODE
+# CORE BUILDER (IMPORTANT)
+# ---------------------------------------------------------
+def build_tpsl_orders(decision) -> List[Dict]:
+    """
+    Build grouped TP/SL order payload
+    """
+    is_buy = decision.side == "LONG"
+    sz = decision.asset_size
+    asset = decision.asset
+
+    logger.debug(f"[BUILD] Creating TP/SL structure | asset={asset}, size={sz}")
+
+    # ENTRY (market-style IOC)
+    entry = {
+        "coin": asset,
+        "is_buy": is_buy,
+        "sz": sz,
+        "limit_px": 0,
+        "order_type": {"limit": {"tif": "Ioc"}},
+        "reduce_only": False,
+    }
+
+    orders = [entry]
+
+    # STOP LOSS
+    if decision.stop_loss:
+        sl_price = decision.stop_loss * (0.995 if is_buy else 1.005)
+
+        orders.append({
+            "coin": asset,
+            "is_buy": not is_buy,
+            "sz": sz,
+            "limit_px": sl_price,
+            "order_type": {
+                "trigger": {
+                    "isMarket": True,
+                    "triggerPx": decision.stop_loss,
+                    "tpsl": "sl",
+                }
+            },
+            "reduce_only": True,
+        })
+
+        logger.debug(f"[BUILD] SL added | trigger={decision.stop_loss}, exec={sl_price}")
+
+    # TAKE PROFIT
+    if decision.take_profit:
+        tp_price = decision.take_profit * (0.995 if is_buy else 1.005)
+
+        orders.append({
+            "coin": asset,
+            "is_buy": not is_buy,
+            "sz": sz,
+            "limit_px": tp_price,
+            "order_type": {
+                "trigger": {
+                    "isMarket": True,
+                    "triggerPx": decision.take_profit,
+                    "tpsl": "tp",
+                }
+            },
+            "reduce_only": True,
+        })
+
+        logger.debug(f"[BUILD] TP added | trigger={decision.take_profit}, exec={tp_price}")
+
+    return orders
+
+
+# ---------------------------------------------------------
+# EXECUTION NODE
 # ---------------------------------------------------------
 async def action_node(state: GraphState) -> Dict[str, Any]:
-    """
-    LangGraph Node: The Execution Layer.
-    Reads the CTODecision and translates it into direct Hyperliquid API calls.
-    """
     decision = state.get("final_decision")
     symbol = state.get("symbol", "UNKNOWN")
-    
+
+    logger.info(f"[ACTION NODE] Received decision: {decision}")
+
+    # ---------------------------
+    # VALIDATION
+    # ---------------------------
     if not decision or decision.final_action in ["HOLD", "ABORT"]:
-        logger.info(f"🛑 Execution Node: Action is {decision.final_action if decision else 'None'}. No trades placed.")
+        logger.warning("[SKIP] No executable action")
         return {"execution_status": "SKIPPED"}
 
     if not PRIVATE_KEY:
-        logger.error("🛑 Cannot execute trade: Missing Private Key. Printing payload instead.")
-        logger.info(f"DRY RUN PAYLOAD: {decision.model_dump_json(indent=2)}")
+        logger.error("[DRY RUN] No private key — printing decision")
+        logger.info(decision.model_dump_json(indent=2))
         return {"execution_status": "SIMULATED"}
 
     try:
         exchange = _get_exchange()
         info = _get_info()
-        
+
         asset = decision.asset or symbol
-        is_buy = True if decision.side == "LONG" else False
-        sz = decision.asset_size
+        logger.info(f"[EXECUTION] Action={decision.final_action} | Asset={asset}")
 
-        logger.info(f"🚀 EXECUTING: {decision.final_action} on {asset}")
-
-        # --- 1. EXECUTE_TRADE (Open Position) ---
+        # -------------------------------------------------
+        # EXECUTE TRADE (CORRECT IMPLEMENTATION)
+        # -------------------------------------------------
         if decision.final_action == "EXECUTE_TRADE":
-            # Set Leverage First
+
+            # STEP 1 — leverage
             if decision.leverage:
-                logger.debug(f"Setting leverage to {decision.leverage}x cross for {asset}...")
+                logger.debug(f"[LEVERAGE] Setting {decision.leverage}x")
                 exchange.update_leverage(asset, decision.leverage, "cross")
-            
-            # Fetch current price to calculate slippage (required for market_open)
-            # Market state gives us the oracle/mark price
-            ctx = info.meta_and_asset_ctxs()[1]
-            asset_ctx = next((item for item in ctx if item["coin"] == asset), None)
-            current_px = float(asset_ctx["oraclePx"]) if asset_ctx else None
 
-            # Open the market position (defaults to 1% slippage)
-            logger.debug(f"Opening Market {decision.side} for {sz} {asset}...")
-            order_result = exchange.market_open(
-                coin=asset, 
-                is_buy=is_buy, 
-                sz=sz, 
-                px=current_px, 
-                slippage=0.01 
+            # STEP 2 — build grouped orders
+            orders = build_tpsl_orders(decision)
+
+            logger.debug(f"[ORDERS] Built payload:")
+            for i, o in enumerate(orders):
+                logger.debug(f"   Order {i+1}: {o}")
+
+            # STEP 3 — execute atomically
+            logger.info("[SUBMIT] Sending grouped TP/SL order...")
+            result = exchange.bulk_orders(
+                order_requests=orders,
+                grouping="normalTpsl"
             )
-            
-            if order_result["status"] == "ok":
-                logger.success(f"✅ Position Opened Successfully!")
-                
-                # Place Stop Loss if provided
-                if decision.stop_loss:
-                    logger.debug(f"Placing Stop Loss at {decision.stop_loss}...")
-                    exchange.order(
-                        asset, 
-                        not is_buy, # Opposite side to close
-                        sz, 
-                        decision.stop_loss, 
-                        order_type={"trigger": {"isMarket": True, "triggerPx": decision.stop_loss, "tpsl": "sl"}}, 
-                        reduce_only=True
-                    )
-                    
-                # Place Take Profit if provided
-                if decision.take_profit:
-                    logger.debug(f"Placing Take Profit at {decision.take_profit}...")
-                    exchange.order(
-                        asset, 
-                        not is_buy, 
-                        sz, 
-                        decision.take_profit, 
-                        order_type={"trigger": {"isMarket": True, "triggerPx": decision.take_profit, "tpsl": "tp"}}, 
-                        reduce_only=True
-                    )
-            else:
-                logger.error(f"❌ Failed to open position: {order_result}")
 
-        # --- 2. CLOSE_POSITION ---
+            logger.info(f"[RESULT] {result}")
+
+            if result.get("status") != "ok":
+                logger.error("[FAIL] Order rejected")
+                return {"execution_status": "FAILED", "details": result}
+
+            logger.success("[SUCCESS] Trade + TP/SL placed atomically")
+
+        # -------------------------------------------------
+        # CLOSE POSITION
+        # -------------------------------------------------
         elif decision.final_action == "CLOSE_POSITION":
-             logger.debug(f"Closing market position for {asset}...")
-             # market_close automatically figures out the size and places a reduce-only order
-             close_result = exchange.market_close(asset)
-             if close_result["status"] == "ok":
-                 logger.success(f"✅ Position Closed Successfully!")
-                 # Important: Cancel all resting SL/TP trigger orders for this coin
-                 exchange.cancel_all(asset) 
-             else:
-                 logger.error(f"❌ Failed to close position: {close_result}")
 
-        # --- 3. MODIFY_POSITION ---
+            logger.info("[CLOSE] Closing position...")
+            result = exchange.market_close(asset)
+
+            logger.info(f"[RESULT] {result}")
+
+            if result.get("status") == "ok":
+                logger.success("[SUCCESS] Position closed")
+                exchange.cancel_all(asset)
+                logger.debug("[CLEANUP] Cancelled all remaining orders")
+            else:
+                logger.error("[FAIL] Close failed")
+
+        # -------------------------------------------------
+        # MODIFY POSITION
+        # -------------------------------------------------
         elif decision.final_action == "MODIFY_POSITION":
-             logger.info(f"Modifying position for {asset}...")
-             # Step A: Update leverage if requested
-             if decision.leverage:
-                 exchange.update_leverage(asset, decision.leverage, "cross")
-             
-             # Step B: If there are new SL/TP, we cancel the old ones and place new ones
-             if decision.stop_loss or decision.take_profit:
-                 logger.debug("Canceling old trigger orders to place new SL/TP...")
-                 exchange.cancel_all(asset) 
-                 time.sleep(1) # Brief pause for exchange to process cancels
-                 
-                 # Note: In a production bot, you must fetch the exact open position size here 
-                 # instead of relying purely on decision.asset_size to ensure perfect closure.
-                 sz_to_close = sz if sz else 0 # Fallback
-                 
-                 if decision.stop_loss:
-                     exchange.order(asset, not is_buy, sz_to_close, decision.stop_loss, 
-                                  {"trigger": {"isMarket": True, "triggerPx": decision.stop_loss, "tpsl": "sl"}}, reduce_only=True)
-                 if decision.take_profit:
-                     exchange.order(asset, not is_buy, sz_to_close, decision.take_profit, 
-                                  {"trigger": {"isMarket": True, "triggerPx": decision.take_profit, "tpsl": "tp"}}, reduce_only=True)
-             
-             logger.success(f"✅ Position Modified.")
+
+            logger.info("[MODIFY] Modifying position...")
+
+            if decision.leverage:
+                exchange.update_leverage(asset, decision.leverage, "cross")
+
+            # ⚠️ MUST fetch real position size
+            user_state = info.user_state(exchange.wallet.address)
+            positions = user_state.get("assetPositions", [])
+
+            pos = next((p for p in positions if p["position"]["coin"] == asset), None)
+
+            if not pos:
+                logger.error("[MODIFY] No open position found")
+                return {"execution_status": "FAILED"}
+
+            real_size = abs(float(pos["position"]["s"]))
+            logger.debug(f"[POSITION] Real size detected: {real_size}")
+
+            # cancel existing triggers only (still basic version)
+            exchange.cancel_all(asset)
+
+            # rebuild TP/SL
+            decision.asset_size = real_size
+            orders = build_tpsl_orders(decision)
+
+            logger.debug("[REBUILD] New TP/SL orders:")
+            for o in orders:
+                logger.debug(o)
+
+            result = exchange.bulk_orders(
+                order_requests=orders[1:],  # only TP/SL, no entry
+                grouping="positionTpsl"
+            )
+
+            logger.info(f"[RESULT] {result}")
+            logger.success("[SUCCESS] Position modified")
 
         return {"execution_status": "SUCCESS"}
 
     except Exception as e:
-        logger.error(f"❌ Execution Node Crash: {e}")
+        logger.exception(f"[CRASH] {str(e)}")
         return {"execution_status": f"FAILED: {str(e)}"}

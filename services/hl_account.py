@@ -1,8 +1,9 @@
 from hyperliquid.info import Info
 from datetime import datetime
 import requests
+from typing import List, Optional  # Add this line
 
-from schema import Wallet, Position
+from services.schema import Wallet, Position
 
 
 class HyperliquidService:

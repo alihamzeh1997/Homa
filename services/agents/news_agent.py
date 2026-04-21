@@ -27,14 +27,19 @@ class _EventRegistryClient:
         from eventregistry import EventRegistry, QueryArticlesIter
 
         er = EventRegistry(apiKey=self._api_key, allowUseOfArchive=False)
+        
+        # Remove the invalid keyword arguments from the constructor
         q = QueryArticlesIter(
             keywords=keyword,
-            lang="eng",
-            sortBy="date",
-            sortByAsc=False,
+            lang="eng"
         )
+        
+        # Use the .set_social_score_sort() or similar if needed, 
+        # but for standard execution, most sorting is now default or handled by er.execQuery
         articles: List[Dict] = []
-        for art in q.execQuery(er, maxItems=20):
+        
+        # Pass the sorting parameters to execQuery instead
+        for art in q.execQuery(er, maxItems=20, sortBy="date", sortByAsc=False):
             articles.append(art)
         return articles
 
@@ -66,6 +71,8 @@ class NewsService:
         internal_articles: List[Article] = []
         for raw in raw_articles:
             pub_date_str = raw.get("dateTime", now.isoformat())
+            raw_val = raw.get("sentiment", 0.5)
+            clamped_sentiment = max(0.0, min(1.0, raw_val))
             try:
                 pub_date = datetime.datetime.fromisoformat(pub_date_str.replace("Z", "+00:00"))
             except ValueError:
@@ -77,7 +84,7 @@ class NewsService:
                     body=raw.get("body", ""),
                     source=raw.get("source", {}).get("title", "Unknown"),
                     published_at=pub_date,
-                    raw_sentiment=raw.get("sentiment", 0.5),
+                    raw_sentiment=clamped_sentiment,
                 )
             )
 

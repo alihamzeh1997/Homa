@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 import time
 from langchain_openai import data
 
-from schema import (
+from services.schema import (
     MarketData,
     OrderBook,
     OrderBookLevel,

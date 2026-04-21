@@ -20,7 +20,7 @@ ANALYST_MODELS = {
     "Gemini": "google/gemini-2.5-flash-lite",
     "Grok": "x-ai/grok-4.1-fast",
     "Kimi": "moonshotai/kimi-k2.5",
-    "Qwen": "qwen/qwen3.6-plus",
+    "Qwen": "qwen/qwen3.5-plus-02-15",
     "GPT": "openai/gpt-5.4-mini"
 }
 
