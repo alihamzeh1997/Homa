@@ -1,7 +1,6 @@
 from hyperliquid.info import Info
 from datetime import datetime
-import requests
-from typing import List, Optional  # Add this line
+from typing import List, Optional
 
 from services.schema import Wallet, Position
 
@@ -34,12 +33,7 @@ class HyperliquidService:
     # ---------- INTERNAL HELPERS ----------
 
     def _get_frontend_orders(self):
-        payload = {
-            "type": "frontendOpenOrders",
-            "user": self.address,
-        }
-        res = requests.post(f"{self.base_url}/info", json=payload)
-        return res.json()
+        return self.info.frontend_open_orders(self.address)
 
     def _extract_sl_tp(self, orders, symbol):
         sl, tp = None, None

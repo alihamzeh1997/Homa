@@ -42,10 +42,10 @@ Current Price: {current_price}
 Funding Rate: {funding_rate}
 Open Interest: {open_interest}
 
-High Timeframe (HTF) Regime (Full History):
+High Timeframe (HTF) Regime — 4h candles, last 100 bars:
 {htf_data}
 
-Low Timeframe (LTF) Pullback Data (Full History):
+Low Timeframe (LTF) Pullback Data — 3m candles, last 100 bars:
 {ltf_data}
 
 --- NEWS & SENTIMENT ---
@@ -71,6 +71,20 @@ Based strictly on the data above, provide your trading signal. Take the current 
    - In the 'reasoning' field, you MUST deeply justify your decision. Explain *why* the HTF and LTF data align, why the news supports your bias, and the exact logical justification for your chosen stop-loss and take-profit levels. Do not just state the numbers; defend them.
 
 Always provide your confidence level (0.0 to 1.0). If you HOLD, CLOSE, or MODIFY, you may leave trade execution fields as null, but you still must justify the inaction/action.
+
+Respond ONLY with a valid JSON object matching this schema — no markdown, no explanation outside the JSON:
+{{
+  "agent_name": "<your name>",
+  "action": "BUY | SELL | HOLD | CLOSE | MODIFY",
+  "side": "LONG | SHORT | null",
+  "asset_size": <float or null>,
+  "usdc_size": <float or null>,
+  "leverage": <int or null>,
+  "stop_loss": <float or null>,
+  "take_profit": <float or null>,
+  "confidence": <float 0.0-1.0>,
+  "reasoning": "<detailed justification>"
+}}
 """
 
 def _build_analyst_prompt(state: GraphState, agent_name: str) -> str:
@@ -121,12 +135,13 @@ async def invoke_analyst(state: GraphState, agent_name: str) -> Dict[str, Any]:
         max_retries=2
     )
     
-    structured_llm = llm.with_structured_output(AgentSignal)
+    structured_llm = llm.with_structured_output(AgentSignal, method="json_mode")
     prompt_text = _build_analyst_prompt(state, agent_name)
     
     try:
         # Await the async invocation to allow true parallel non-blocking execution
         result: AgentSignal = await structured_llm.ainvoke(prompt_text)
+        result = result.model_copy(update={"agent_name": agent_name})
         logger.success(f"✅ {agent_name} Signal: {result.action} (Conf: {result.confidence:.2f})")
         
         return {"agent_signals": {agent_name: result}}

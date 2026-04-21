@@ -54,11 +54,9 @@ async def sentinel_node(state: GraphState) -> Dict[str, Any]:
 
     logger.debug(f"🛡️ Evaluating Sentinel constraints for {symbol} at {current_time_utc}...")
 
-    # Safely extract HTF data
-    if market and market.htf_series:
-        htf_data_str = str([h.model_dump() for h in market.htf_series])
-    else:
-        htf_data_str = "N/A"
+    # Safely extract HTF (last 10 bars) and LTF (last 20 bars)
+    htf_data_str = str([h.model_dump() for h in market.htf_series[-10:]]) if market and market.htf_series else "N/A"
+    ltf_data_str = str([i.model_dump() for i in market.intraday_series[-20:]]) if market and market.intraday_series else "N/A"
 
     prompt_text = f"""
     You are the Sentinel Risk Manager for an automated {symbol} trading desk.
@@ -70,7 +68,8 @@ async def sentinel_node(state: GraphState) -> Dict[str, Any]:
     - Price: {market.current_price if market else 'N/A'}
     - Funding Rate: {market.funding_rate if market else 'N/A'}
     - Open Interest: {market.open_interest if market else 'N/A'}
-    - HTF Trend (Full History): {htf_data_str}
+    - HTF Trend — 4h candles, last 10 bars: {htf_data_str}
+    - LTF Pullback — 3m candles, last 20 bars: {ltf_data_str}
     
     LATEST NEWS SUMMARY:
     - Articles Count: {news.article_count if news else 0}

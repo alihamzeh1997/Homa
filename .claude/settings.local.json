@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python tests/hl_test.py)",
+      "Bash(python -m tests.hl_test)",
+      "Bash(set PYTHONIOENCODING=utf-8)",
+      "Bash(python -c \"import sys; sys.stdout.reconfigure\\(encoding='utf-8'\\)\")",
+      "Bash(PYTHONUTF8=1 python -m tests.hl_test)",
+      "WebFetch(domain:github.com)",
+      "Bash(curl -s \"https://raw.githubusercontent.com/hyperliquid-dex/hyperliquid-python-sdk/master/hyperliquid/exchange.py\")",
+      "Read(//tmp/**)",
+      "Bash(find \"C:\\\\Users\\\\KLX\\\\Documents\\\\Github\\\\Homa ALI\\\\services\\\\agents\\\\\" -type f -name \"*.py\" | head -20)",
+      "Bash(PYTHONUTF8=1 python -m tests.analyst_test)",
+      "Bash(PYTHONUTF8=1 uv run pytest tests/analyst_test.py::test_analyst_live -v -s)"
+    ]
+  }
+}

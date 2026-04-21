@@ -28,7 +28,8 @@ CURRENT TIME (UTC): {current_time}
 Current Price: {current_price}
 Funding Rate: {funding_rate}
 Open Interest: {open_interest}
-HTF Trend Context: {htf_data}
+HTF Trend Context — 4h candles, last 10 bars: {htf_data}
+LTF Pullback Context — 3m candles, last 20 bars: {ltf_data}
 Average News Sentiment (0-1): {average_sentiment}
 Top Headlines: {headlines}
 
@@ -79,7 +80,8 @@ async def cto_node(state: GraphState) -> Dict[str, Any]:
     logger.debug(f"👔 CTO is reviewing reports and market data for {symbol} at {current_time_utc}...")
 
     # Safely extract and stringify Market, News, and Portfolio context
-    htf_data = str([h.model_dump() for h in market.htf_series]) if market and market.htf_series else "N/A"
+    htf_data = str([h.model_dump() for h in market.htf_series[-10:]]) if market and market.htf_series else "N/A"
+    ltf_data = str([i.model_dump() for i in market.intraday_series[-20:]]) if market and market.intraday_series else "N/A"
     headlines = str(news.top_headlines) if news and news.top_headlines else "N/A"
     open_pos = str([p.model_dump() for p in portfolio.open_positions]) if portfolio and portfolio.open_positions else "None"
 
@@ -115,6 +117,7 @@ async def cto_node(state: GraphState) -> Dict[str, Any]:
         funding_rate=market.funding_rate if market else "N/A",
         open_interest=market.open_interest if market else "N/A",
         htf_data=htf_data,
+        ltf_data=ltf_data,
         average_sentiment=news.average_sentiment if news else 0.5,
         headlines=headlines,
         available_cash=portfolio.available_cash if portfolio else "N/A",
