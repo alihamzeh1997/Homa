@@ -11,7 +11,20 @@
       "Read(//tmp/**)",
       "Bash(find \"C:\\\\Users\\\\KLX\\\\Documents\\\\Github\\\\Homa ALI\\\\services\\\\agents\\\\\" -type f -name \"*.py\" | head -20)",
       "Bash(PYTHONUTF8=1 python -m tests.analyst_test)",
-      "Bash(PYTHONUTF8=1 uv run pytest tests/analyst_test.py::test_analyst_live -v -s)"
+      "Bash(PYTHONUTF8=1 uv run pytest tests/analyst_test.py::test_analyst_live -v -s)",
+      "Bash(uv run *)",
+      "Bash(uv pip *)",
+      "Bash(uv add *)",
+      "Bash(PYTHONUTF8=1 uv run python -c \"from services.agents.graph import graph; print\\('Graph compiled OK'\\)\")",
+      "Bash(python -c \"from services.agents.state_schema import GraphState; from services.agents.graph import build_graph; print\\('OK'\\)\")",
+      "Bash(.venv/Scripts/python -c \"from langgraph.checkpoint.sqlite import SqliteSaver; print\\('OK'\\)\")",
+      "Bash(.venv/Scripts/python -c \"from services.agents.graph import build_graph; print\\('OK'\\)\")",
+      "Bash(.venv/Scripts/python -c \"from services.agents.graph import build_graph; g = build_graph\\(\\); print\\('Graph compiled OK'\\)\")",
+      "Bash(.venv/Scripts/python -m pytest tests/analyst_test.py::test_analyst_buy_signal -v)",
+      "Bash(.venv/Scripts/python -m pytest tests/analyst_test.py::test_analyst_buy_signal tests/analyst_test.py::test_analyst_fallback_on_error tests/analyst_test.py::test_analyst_with_missing_news_and_portfolio -v)",
+      "Bash(.venv/Scripts/python -c \"from services.agents.graph import graph; print\\('OK'\\)\")",
+      "Bash(.venv/Scripts/python -c ' *)",
+      "Bash(.venv/Scripts/python main.py)"
     ]
   }
 }

@@ -33,7 +33,7 @@ def compute_intraday_features(candles) -> list[IntradayIndicator]:
 
     return [
         IntradayIndicator(
-            timestamp=idx,
+            timestamp=idx.to_pydatetime(),
             close=row["close"],
             ema_20=row.get("ema_20"),
             rsi_7=row.get("rsi_7"),
@@ -65,7 +65,7 @@ def compute_htf_features(candles) -> list[HTFIndicator]:
 
     return [
         HTFIndicator(
-            timestamp=idx,
+            timestamp=idx.to_pydatetime(),
             close=row["close"],
             ema_20=row.get("ema_20"),
             ema_50=row.get("ema_50"),

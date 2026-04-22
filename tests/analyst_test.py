@@ -144,7 +144,7 @@ def make_mock_signal(agent_name: str, action: str = "BUY") -> AgentSignal:
 def mock_llm_returning(signal: AgentSignal):
     """Returns a context manager that patches ChatOpenAI to return the given signal."""
     mock_structured = AsyncMock()
-    mock_structured.ainvoke = AsyncMock(return_value=signal)
+    mock_structured.ainvoke = AsyncMock(return_value=signal.model_dump())
 
     mock_llm_instance = MagicMock()
     mock_llm_instance.with_structured_output.return_value = mock_structured

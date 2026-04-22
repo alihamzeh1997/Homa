@@ -24,8 +24,19 @@ ANALYST_MODELS = {
     "GPT": "openai/gpt-5.4-mini"
 }
 
+# Enabled analysts for the MoE panel — can be toggled on/off
+ENABLED_ANALYSTS = [
+    "DeepSeek",
+    # "MiniMax",
+    "Gemini",
+    # "Grok",
+    # "Kimi",
+    # "Qwen",
+    "GPT",
+]
+
 # Node names are the lowercase analyst keys — used by graph.py for wiring
-ANALYST_NODES = [name.lower() for name in ANALYST_MODELS]
+ANALYST_NODES = [name.lower() for name in ENABLED_ANALYSTS]
 
 # ---------------------------------------------------------
 # 2. SHARED PROMPT TEMPLATE
@@ -61,33 +72,46 @@ Open Positions: {open_positions}
 --- YOUR TASK ---
 Based strictly on the data above, provide your trading signal. Take the current time and day of the week into account when assessing liquidity and volatility expectations (e.g., weekend chop vs. weekday volume).
 
+EXCHANGE CONSTRAINT — CRITICAL:
+Hyperliquid supports only ONE position per asset per account. If the portfolio already shows an open position for {symbol},
+you CANNOT open a second independent trade. A BUY or SELL order would simply add to or reduce the existing position unintentionally.
+Therefore:
+- If a position is already open, prefer MODIFY (to adjust size, SL, or TP) or CLOSE (to exit entirely) or HOLD.
+- Only recommend BUY or SELL if there is NO open position for {symbol}, or if you explicitly intend to add to or flip the existing one — and justify that clearly.
+
 1. IF YOU BUY OR SELL:
    - You MUST specify side ("LONG" or "SHORT").
    - You MUST specify asset_size and/or usdc_size.
    - You MUST specify leverage (0 to 40).
    - You MUST specify exact stop_loss and take_profit prices.
-   
+
 2. JUSTIFICATION (CRITICAL):
    - In the 'reasoning' field, you MUST deeply justify your decision. Explain *why* the HTF and LTF data align, why the news supports your bias, and the exact logical justification for your chosen stop-loss and take-profit levels. Do not just state the numbers; defend them.
 
 Always provide your confidence level (0.0 to 1.0). If you HOLD, CLOSE, or MODIFY, you may leave trade execution fields as null, but you still must justify the inaction/action.
 
+LAST CTO DECISION (what the final decision-maker concluded last cycle):
+{cto_memory}
+
+YOUR LAST 3 SIGNALS (oldest first) — use these to avoid repeating mistakes and stay consistent unless the market has changed:
+{memory}
+
 Respond ONLY with a valid JSON object matching this schema — no markdown, no explanation outside the JSON:
 {{
-  "agent_name": "<your name>",
+  "agent_name": "<your name>", # It's either DeepSeek, MiniMax, Gemini, Grok, Kimi, Qwen, or GPT — but do not self-name creatively. Always return the agent_name field with the correct name of you are.
   "action": "BUY | SELL | HOLD | CLOSE | MODIFY",
   "side": "LONG | SHORT | null",
-  "asset_size": <float or null>,
-  "usdc_size": <float or null>,
-  "leverage": <int or null>,
-  "stop_loss": <float or null>,
-  "take_profit": <float or null>,
+  "asset_size": <float or null>, # If you say BUY or SELL You must specify the asset size in units (e.g. 0.001)
+  "usdc_size": <float or null>, # If you say BUY or SELL You must specify the size in USDC (e.g. 50.0)
+  "leverage": <int or null>, # If you say BUY or SELL You must specify the leverage (e.g. 5)
+  "stop_loss": <float or null>, # If you say BUY or SELL or MODIFY You must specify the stop loss price (e.g. 19500.0)
+  "take_profit": <float or null>, # If you say BUY or SELL or MODIFY You must specify the take profit price (e.g. 20000.0)
   "confidence": <float 0.0-1.0>,
   "reasoning": "<detailed justification>"
 }}
 """
 
-def _build_analyst_prompt(state: GraphState, agent_name: str) -> str:
+def _build_analyst_prompt(state: GraphState, agent_name: str, memory_str: str = "  No previous signals yet.", cto_memory_str: str = "  No previous CTO decision yet.") -> str:
     """Helper to safely format the prompt strings from GraphState."""
     current_time_utc = datetime.now(timezone.utc).strftime("%A, %Y-%m-%d %H:%M:%S UTC")
     symbol = state.get("symbol", "UNKNOWN")
@@ -115,7 +139,9 @@ def _build_analyst_prompt(state: GraphState, agent_name: str) -> str:
         headlines=headlines,
         available_cash=portfolio.available_cash if portfolio else "N/A",
         account_value=portfolio.account_value if portfolio else "N/A",
-        open_positions=open_pos
+        open_positions=open_pos,
+        memory=memory_str,
+        cto_memory=cto_memory_str,
     )
 
 # ---------------------------------------------------------
@@ -135,16 +161,38 @@ async def invoke_analyst(state: GraphState, agent_name: str) -> Dict[str, Any]:
         max_retries=2
     )
     
-    structured_llm = llm.with_structured_output(AgentSignal, method="json_mode")
-    prompt_text = _build_analyst_prompt(state, agent_name)
-    
+    raw_llm = llm.with_structured_output(None, method="json_mode")
+
+    # Inject last 3 signals from memory
+    past = (state.get("analyst_signal_history") or {}).get(agent_name, [])
+    if past:
+        memory_str = "\n".join(
+            f"  [Run -{len(past)-i}] Action: {h['action']} | Confidence: {h['confidence']} | Reasoning: {h['reasoning'][:300]}"
+            for i, h in enumerate(past)
+        )
+    else:
+        memory_str = "  No previous signals yet."
+
+    # Inject last CTO decision
+    cto_history = state.get("cto_history") or []
+    if cto_history:
+        last_cto = cto_history[-1]
+        cto_memory_str = f"  Action: {last_cto.get('final_action')} | Confidence: {last_cto.get('confidence')} | Reasoning: {last_cto.get('reasoning', '')[:300]}"
+    else:
+        cto_memory_str = "  No previous CTO decision yet."
+
+    prompt_text = _build_analyst_prompt(state, agent_name, memory_str, cto_memory_str)
+
     try:
-        # Await the async invocation to allow true parallel non-blocking execution
-        result: AgentSignal = await structured_llm.ainvoke(prompt_text)
-        result = result.model_copy(update={"agent_name": agent_name})
+        raw: dict = await raw_llm.ainvoke(prompt_text)
+        raw["agent_name"] = agent_name  # always override — models name themselves creatively
+        result = AgentSignal(**raw)
         logger.success(f"✅ {agent_name} Signal: {result.action} (Conf: {result.confidence:.2f})")
-        
-        return {"agent_signals": {agent_name: result}}
+
+        return {
+            "agent_signals": {agent_name: result},
+            "analyst_signal_history": {agent_name: [result.model_dump()]},
+        }
         
     except Exception as e:
         logger.error(f"❌ Analyst {agent_name} failed: {e}")

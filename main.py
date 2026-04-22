@@ -25,44 +25,36 @@ def serialize_for_ui(obj):
 # ---------------------------------------------------------
 # 2. BACKGROUND BOT RUNNER (EVERY 3 MINS)
 # ---------------------------------------------------------
-async def bot_loop(shared_traces):
-    """The async loop that triggers the graph every 3 minutes."""
-    while True:
-        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-        symbol = "BTC"  # You can extend this to iterate over multiple symbols later
-        
-        # Create a new trace dictionary for this execution
-        current_trace = {
-            "timestamp": timestamp,
-            "symbol": symbol,
-            "steps": []
-        }
-        
-        # Appendleft so the newest execution is always at the top
-        shared_traces.appendleft(current_trace)
-        
-        try:
-            initial_state = {"symbol": symbol, "agent_signals": {}}
-            
-            # .astream() yields the state updates outputted by each node as they finish
-            async for chunk in graph.astream(initial_state):
-                for node_name, state_update in chunk.items():
-                    safe_data = serialize_for_ui(state_update)
-                    
-                    # Store the node's output data
-                    current_trace["steps"].append({
-                        "node": node_name,
-                        "data": safe_data
-                    })
-                    
-        except Exception as e:
-            current_trace["steps"].append({
-                "node": "🚨 CRITICAL ERROR",
-                "data": {"error": str(e)}
-            })
-        
-        # Sleep for 3 minutes (180 seconds) before triggering the next cycle
-        await asyncio.sleep(180)
+async def _run_one_cycle(shared_traces):
+    """Single bot execution cycle: runs the full LangGraph pipeline once."""
+    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    symbol = "BTC"
+
+    current_trace = {"timestamp": timestamp, "symbol": symbol, "steps": []}
+    shared_traces.appendleft(current_trace)
+
+    try:
+        initial_state = {"symbol": symbol, "agent_signals": {}}
+        config = {"configurable": {"thread_id": f"homa-bot-{symbol}"}}
+
+        async for chunk in graph.astream(initial_state, config=config):
+            for node_name, state_update in chunk.items():
+                safe_data = serialize_for_ui(state_update)
+                current_trace["steps"].append({"node": node_name, "data": safe_data})
+
+        # After all nodes finish, grab the full accumulated state (includes all history)
+        final_state = graph.get_state(config)
+        if final_state and final_state.values:
+            history_snapshot = {
+                k: serialize_for_ui(v)
+                for k, v in final_state.values.items()
+                if k in ("sentinel_history", "analyst_signal_history", "desk_history", "cto_history")
+            }
+            current_trace["steps"].append({"node": "📚 FULL MEMORY SNAPSHOT", "data": history_snapshot})
+
+    except Exception as e:
+        current_trace["steps"].append({"node": "🚨 CRITICAL ERROR", "data": {"error": str(e)}})
+
 
 # ---------------------------------------------------------
 # 3. THREAD MANAGEMENT (STREAMLIT SAFE)
@@ -74,7 +66,7 @@ def get_shared_state():
     even when Streamlit reruns the script on UI interactions.
     """
     state = {
-        "traces": deque(maxlen=100),  # Keep only the last 100 traces
+        "traces": deque(maxlen=100),
         "thread_started": False
     }
     return state
@@ -82,11 +74,18 @@ def get_shared_state():
 shared_state = get_shared_state()
 
 if not shared_state["thread_started"]:
-    # Spin up the background bot in a separate daemon thread
     def run_async_loop():
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        loop.run_until_complete(bot_loop(shared_state["traces"]))
+        """
+        Runs forever: one fresh asyncio.run() per cycle so every iteration
+        gets a clean event loop and executor — prevents 'cannot schedule new
+        futures after shutdown' errors between cycles.
+        """
+        while True:
+            try:
+                asyncio.run(_run_one_cycle(shared_state["traces"]))
+            except Exception as e:
+                pass  # errors are captured inside _run_one_cycle; this is a safety net
+            time.sleep(180)
 
     bot_thread = threading.Thread(target=run_async_loop, daemon=True)
     bot_thread.start()

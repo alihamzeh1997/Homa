@@ -19,7 +19,9 @@ _CTOModelFallback = "google/gemini-3-flash-preview"
 # ---------------------------------------------------------
 CTO_PROMPT = """
 You are the Chief Trading Officer (CTO) of an elite quantitative hedge fund.
-You have ultimate execution authority. Your subordinate agents have provided their reports.
+You have ultimate execution authority. Your subordinate agents have provided their reports. You should review all inputs and the current market context to make the absolute final decision on whether and how to trade.
+You have the final power, the others agents output is just a suggestion for you not an order. You don't have to follow their suggestions, you can overrule them if you have a good reason. You can also choose to HOLD or ABORT if you think the risk is too high.
+For instance if they said Emergency but you think it's a false alarm you can choose to HOLD or if they said EXECUTE_TRADE but you see a critical risk factor they missed, you can choose to ABORT or HOLD instead.
 
 TARGET ASSET: {symbol}
 CURRENT TIME (UTC): {current_time}
@@ -47,6 +49,14 @@ Open Positions: {open_positions}
 --- 3. PSYCHOLOGIST REPORT (Behavioral Audit) ---
 {psych_report}
 
+EXCHANGE CONSTRAINT — CRITICAL:
+Hyperliquid supports only ONE position per asset per account. This is a hard technical limit.
+- If 'Open Positions' above shows an existing {symbol} position: you CANNOT issue EXECUTE_TRADE to open a second one.
+  You must choose MODIFY_POSITION (adjust SL/TP/size) or CLOSE_POSITION (exit fully) or HOLD instead.
+- If you intend to flip direction (e.g., from LONG to SHORT), you must CLOSE first, then the next cycle will open the new side.
+- Only issue EXECUTE_TRADE if there is NO existing position for {symbol}.
+- Always set the 'asset' field (e.g., 'BTC') so the execution layer knows which position to act on.
+
 --- YOUR TASK ---
 You must review the inputs from your team and the current market context. You have the authority to accept the recommendations, adjust the parameters, or completely overrule your subordinates.
 
@@ -56,6 +66,9 @@ Determine the absolute final parameters for the exchange API.
 3. If modifying or closing, explicitly state the 'asset' (e.g., BTC) to identify which position to adjust, and provide the new SL/TP or size adjustments.
 4. Define clear 'invalidation_criteria' (e.g., '4H close below 60k invalidates setup').
 5. If you override any of your subordinates, list them in 'agents_overruled' and justify your dictatorship in the 'reasoning' field.
+
+YOUR LAST 3 DECISIONS (oldest first) — use these to stay consistent and avoid reckless flip-flopping:
+{cto_memory}
 """
 
 # ---------------------------------------------------------
@@ -78,6 +91,15 @@ async def cto_node(state: GraphState) -> Dict[str, Any]:
 
     current_time_utc = datetime.now(timezone.utc).strftime("%A, %Y-%m-%d %H:%M:%S UTC")
     logger.debug(f"👔 CTO is reviewing reports and market data for {symbol} at {current_time_utc}...")
+
+    cto_history = state.get("cto_history") or []
+    if cto_history:
+        cto_memory_str = "\n".join(
+            f"  [Run -{len(cto_history)-i}] Action: {h['final_action']} | Reasoning: {h['reasoning'][:200]}"
+            for i, h in enumerate(cto_history)
+        )
+    else:
+        cto_memory_str = "  No previous decisions yet."
 
     # Safely extract and stringify Market, News, and Portfolio context
     htf_data = str([h.model_dump() for h in market.htf_series[-10:]]) if market and market.htf_series else "N/A"
@@ -125,7 +147,8 @@ async def cto_node(state: GraphState) -> Dict[str, Any]:
         open_positions=open_pos,
         desk_report=desk_str,
         money_report=money_str,
-        psych_report=psych_str
+        psych_report=psych_str,
+        cto_memory=cto_memory_str,
     )
 
     try:
@@ -142,7 +165,7 @@ async def cto_node(state: GraphState) -> Dict[str, Any]:
             
         logger.info(f"📝 CTO Reasoning: {result.reasoning}")
 
-        return {"final_decision": result}
+        return {"final_decision": result, "cto_history": [result.model_dump()]}
 
     except Exception as e:
         logger.error(f"❌ CTO Failed: {e}. Issuing Emergency ABORT.")

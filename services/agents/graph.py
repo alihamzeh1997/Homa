@@ -1,4 +1,5 @@
 from langgraph.graph import StateGraph, START, END
+from langgraph.checkpoint.memory import MemorySaver
 
 from services.agents.state_schema import GraphState
 from services.agents.hl_input_node import market_data_node
@@ -42,13 +43,25 @@ def build_graph() -> StateGraph:
     builder.add_node("news", news_node)
     builder.add_node("sentinel", sentinel_node)
 
-    builder.add_node("deepseek", deepseek_node)
-    builder.add_node("minimax", minimax_node)
-    builder.add_node("gemini", gemini_node)
-    builder.add_node("grok", grok_node)
-    builder.add_node("kimi", kimi_node)
-    builder.add_node("qwen", qwen_node)
-    builder.add_node("gpt", gpt_node)
+
+    ANALYST_NODE_MAP = {
+        "deepseek": deepseek_node,
+        "minimax": minimax_node,
+        "gemini": gemini_node,
+        "grok": grok_node,
+        "kimi": kimi_node,
+        "qwen": qwen_node,
+        "gpt": gpt_node,
+    }
+    for name in ANALYST_NODES:
+        builder.add_node(name, ANALYST_NODE_MAP[name])
+    # builder.add_node("deepseek", deepseek_node)
+    # builder.add_node("minimax", minimax_node)
+    # builder.add_node("gemini", gemini_node)
+    # builder.add_node("grok", grok_node)
+    # builder.add_node("kimi", kimi_node)
+    # builder.add_node("qwen", qwen_node)
+    # builder.add_node("gpt", gpt_node)
 
     builder.add_node("desk_manager", desk_manager_node)
     builder.add_node("money_manager", money_manager_node)
@@ -85,10 +98,12 @@ def build_graph() -> StateGraph:
     builder.add_edge("cto", "action")
     builder.add_edge("action", END)
 
-    return builder.compile()
+    checkpointer = MemorySaver()
+    return builder.compile(checkpointer=checkpointer)
 
 
 # Module-level compiled graph — import and invoke directly:
 #   from services.agents.graph import graph
-#   result = await graph.ainvoke({"symbol": "BTC", "agent_signals": {}})
+#   config = {"configurable": {"thread_id": "btc-bot"}}
+#   result = await graph.ainvoke({"symbol": "BTC", "agent_signals": {}}, config=config)
 graph = build_graph()

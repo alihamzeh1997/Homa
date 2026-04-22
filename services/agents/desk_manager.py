@@ -19,7 +19,7 @@ _DeskManagerModelFallback = "google/gemini-3-flash-preview"
 # ---------------------------------------------------------
 DESK_MANAGER_PROMPT = """
 You are the Chief Risk Officer and Desk Manager of a quantitative trading firm.
-Your MoE (Mixture of Experts) panel of 7 elite analysts has just submitted their trading signals.
+Your MoE (Mixture of Experts) panel of {analyst_count} elite analysts has just submitted their trading signals.
 
 TARGET ASSET: {symbol}
 CURRENT TIME (UTC): {current_time}
@@ -40,6 +40,12 @@ Current Open Positions: {open_positions}
 --- ANALYST SIGNALS ---
 {analyst_signals_summary}
 
+EXCHANGE CONSTRAINT — CRITICAL:
+Hyperliquid supports only ONE position per asset per account. A new BUY or SELL order does not open
+a second position — it adds to or reduces the existing one. Check 'Current Open Positions' above before deciding:
+- If a position for {symbol} is already open: prefer MODIFY_POSITION or CLOSE_POSITION or HOLD. Flag it as a risk_warning if analysts recommended a fresh BUY/SELL while a position is already open.
+- Only approve a fresh BUY or SELL if NO position exists for {symbol}, or if the intent is explicitly to add size or flip direction.
+
 --- YOUR TASK ---
 1. Evaluate the consensus. What is the majority recommending (BUY, SELL, HOLD)? If the panel is heavily split (e.g., 3 BUY, 4 SELL), the bias is CONFLICTED.
 2. If the consensus is to BUY or SELL, you must extract the safest, most logical trade parameters from the analysts' suggestions.
@@ -49,6 +55,12 @@ Current Open Positions: {open_positions}
    - Select the most logical stop_loss and take_profit based on the analysts' reasoning and current market context.
 4. If the trade is too risky, or the analysts are completely conflicted, your recommended_action MUST be "ABORT" or "HOLD".
 5. Log any severe disagreements between models in the 'risk_warnings' list.
+
+LAST CTO DECISION (what the final decision-maker concluded last cycle):
+{cto_memory}
+
+YOUR LAST 3 DECISIONS (oldest first) — use these to detect if the desk has been repeatedly holding or flip-flopping:
+{desk_memory}
 """
 
 def _format_signals(signals: Dict[str, Any]) -> str:
@@ -83,6 +95,23 @@ async def desk_manager_node(state: GraphState) -> Dict[str, Any]:
     current_time_utc = datetime.now(timezone.utc).strftime("%A, %Y-%m-%d %H:%M:%S UTC")
 
     logger.debug(f"⚖️ Desk Manager evaluating {len(agent_signals)} signals for {symbol} at {current_time_utc}...")
+
+    desk_history = state.get("desk_history") or []
+    if desk_history:
+        desk_memory_str = "\n".join(
+            f"  [Run -{len(desk_history)-i}] Action: {h['recommended_action']} | Bias: {h['consensus_bias']} | Reasoning: {h['reasoning'][:200]}"
+            for i, h in enumerate(desk_history)
+        )
+    else:
+        desk_memory_str = "  No previous decisions yet."
+
+    # Inject last CTO decision
+    cto_history = state.get("cto_history") or []
+    if cto_history:
+        last_cto = cto_history[-1]
+        cto_memory_str = f"  Action: {last_cto.get('final_action')} | Confidence: {last_cto.get('confidence')} | Reasoning: {last_cto.get('reasoning', '')[:300]}"
+    else:
+        cto_memory_str = "  No previous CTO decision yet."
 
     # --- FALLBACK LLM SETUP ---
     # Primary setup (GPT-4o)
@@ -126,7 +155,10 @@ async def desk_manager_node(state: GraphState) -> Dict[str, Any]:
         available_cash=portfolio.available_cash if portfolio else "N/A",
         account_value=portfolio.account_value if portfolio else "N/A",
         open_positions=open_pos,
-        analyst_signals_summary=signals_str
+        analyst_signals_summary=signals_str,
+        desk_memory=desk_memory_str,
+        cto_memory=cto_memory_str,
+        analyst_count=len(agent_signals)
     )
 
     try:
@@ -138,7 +170,7 @@ async def desk_manager_node(state: GraphState) -> Dict[str, Any]:
             for warning in result.risk_warnings:
                 logger.warning(f"⚠️ Risk Flag: {warning}")
 
-        return {"desk_decision": result}
+        return {"desk_decision": result, "desk_history": [result.model_dump()]}
 
     except Exception as e:
         logger.error(f"❌ Desk Manager AND Fallback Failed: {e}. Defaulting to ABORT.")
